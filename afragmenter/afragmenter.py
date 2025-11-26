@@ -84,6 +84,7 @@ class AFragmenter:
                 min_size: int = 10,
                 attempt_merge: bool = True,
                 min_avg_pae: Optional[float] = None,
+                collapse_intervals: bool = False,
                 **kwargs) -> 'ClusteringResult':
         """
         Create a graph from the edge_weights_matrix and cluster it using the Leiden algorithm.
@@ -96,6 +97,9 @@ class AFragmenter:
                                         If a negative value is given, the algorithm will run until a stable iteration is reached.
         - min_size (int, optional): The minimum size of the clusters to keep. Must be between 0 and the number of residues.
         - attempt_merge (bool, optional): Whether to attempt to merge smaller clusters with adjacent larger ones. Defaults to True.
+        - min_avg_pae (float, optional): The maximum allowed average PAE within a cluster. Clusters above this threshold are removed.
+        - collapse_intervals (bool, optional): If True, represent each cluster as a single interval spanning from the minimum to
+                                               maximum residue index in that cluster, even if the residues are discontinuous.
         - **kwargs: Additional keyword arguments to be passed to the community_leiden function from igraph.
 
         Returns:
@@ -116,7 +120,9 @@ class AFragmenter:
             "objective_function": objective_function,
             "n_iterations": n_iterations,
             "min_size": min_size,
-            "attempt_merge": attempt_merge
+            "attempt_merge": attempt_merge,
+            "min_avg_pae": min_avg_pae,
+            "collapse_intervals": collapse_intervals,
         })
         
         clusters, cluster_params = cluster_graph(graph=self.graph, 
@@ -126,7 +132,7 @@ class AFragmenter:
                                  return_params=True,
                                  **kwargs)
         params.update(cluster_params) # Update the parameters with the actual values used for clustering
-        cluster_intervals = find_cluster_intervals(clusters)
+        cluster_intervals = find_cluster_intervals(clusters, collapse_intervals=collapse_intervals)
         cluster_intervals = filter_cluster_intervals(intervals=cluster_intervals, 
                                                      min_size=min_size, 
                                                      attempt_merge=attempt_merge,
@@ -141,6 +147,7 @@ class AFragmenter:
             min_size: int = 10,
             attempt_merge: bool = True,
             min_avg_pae: Optional[float] = None,
+            collapse_intervals: bool = False,
             **kwargs) -> 'ClusteringResult':
         """Alias for the cluster method."""
         return self.cluster(resolution=resolution, 
@@ -149,6 +156,7 @@ class AFragmenter:
                             min_size=min_size, 
                             attempt_merge=attempt_merge,
                             min_avg_pae=min_avg_pae,
+                            collapse_intervals=collapse_intervals,
                             **kwargs)
 
     def plot_pae(self, **kwargs) -> Tuple[image.AxesImage, axes.Axes]:

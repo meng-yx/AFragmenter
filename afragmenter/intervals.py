@@ -3,12 +3,16 @@ import numpy as np
 
 from typing import Optional, Union
 
-def find_cluster_intervals(clusters: igraph.VertexClustering) -> dict:
+def find_cluster_intervals(clusters: igraph.VertexClustering,
+                           collapse_intervals: bool = False) -> dict:
     """
     Create a dictionary of cluster intervals from the vertex clustering object.
 
     Parameters:
     - clusters (igraph.VertexClustering): The vertex clustering object.
+    - collapse_intervals (bool, optional): If True, represent each cluster with a single interval spanning
+                                           from the minimum to maximum residue index in that cluster, even
+                                           if the residues are discontinuous. Defaults to False.
 
     Returns:
     - dict: A dictionary where the keys are the cluster indices and the values are lists of tuples representing the cluster intervals.
@@ -23,12 +27,19 @@ def find_cluster_intervals(clusters: igraph.VertexClustering) -> dict:
     for i, cluster in enumerate(clusters):
         region = []
         if cluster:
-            start = cluster[0]
-            for j in range(1, len(cluster)):
-                if cluster[j] != cluster[j-1] + 1:
-                    region.append((start, cluster[j-1]))
-                    start = cluster[j]
-            region.append((start, cluster[-1]))
+            if collapse_intervals:
+                # Collapse all residues in this cluster into a single interval [min, max]
+                start = min(cluster)
+                end = max(cluster)
+                region.append((start, end))
+            else:
+                # Preserve the original behavior: split into contiguous intervals
+                start = cluster[0]
+                for j in range(1, len(cluster)):
+                    if cluster[j] != cluster[j - 1] + 1:
+                        region.append((start, cluster[j - 1]))
+                        start = cluster[j]
+                region.append((start, cluster[-1]))
         results[i] = region
     return results
 

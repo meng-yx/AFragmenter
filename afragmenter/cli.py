@@ -169,6 +169,13 @@ class EitherRequired(Option):
               show_default="None",
               help="Minimum average PAE for a cluster to be kept."
 )
+@click.option("--collapse-intervals/--no-collapse-intervals",
+              is_flag=True,
+              default=False,
+              show_default=True,
+              help="If enabled, represent each cluster as a single interval spanning from the minimum to maximum "
+                   "residue index in that cluster, even if the residues are discontinuous."
+)
 
 def main(structure: Path, 
          json: Path,
@@ -183,6 +190,7 @@ def main(structure: Path,
          plot_result: Path,
          save_fasta: Path,
          min_avg_pae: float,
+         collapse_intervals: bool,
          name: str) :
     
     if afdb:
@@ -198,7 +206,8 @@ def main(structure: Path,
                                 objective_function=objective_function, 
                                 min_size=min_size,
                                 attempt_merge=attempt_merge,
-                                min_avg_pae=min_avg_pae)
+                                min_avg_pae=min_avg_pae,
+                                collapse_intervals=collapse_intervals)
     
     # If base_name is set to 'auto', the name will be parsed from the structure file
     # base_name = None will cause the name to be parsed from the structure file
