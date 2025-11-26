@@ -81,9 +81,11 @@ def fetch_afdb_data(
     pae_data = pae_data_json[0] if isinstance(pae_data_json, list) and pae_data_json else pae_data_json
 
     structure_data = fetch_url_content(structure_download_url).text
+
+    structure_basename = structure_download_url.split('/')[-1]
     
-    Data = namedtuple('AFDB_Data', ['pae_data', 'structure_data'])
-    return Data(pae_data, structure_data)
+    Data = namedtuple('AFDB_Data', ['pae_data', 'structure_data', 'structure_basename'])
+    return Data(pae_data, structure_data, structure_basename)
 
     
     
