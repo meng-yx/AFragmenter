@@ -274,6 +274,63 @@ def filter_intervals_by_average_pae(intervals: dict, pae_matrix: np.ndarray,
     return renumbered_intervals
 
 
+def remove_enclosed_clusters(intervals: dict) -> dict:
+    """
+    Remove clusters whose overall span is fully enclosed by another cluster's span.
+
+    This helper is useful, for example, after clustering with ``collapse_intervals=True``,
+    where each cluster is represented by a single (start, end) interval. It also works
+    when clusters have multiple intervals: in that case the overall span for a cluster
+    is defined as (min(start), max(end)) across all its intervals.
+
+    Any cluster A whose span [start_A, end_A] is fully contained within another cluster B's
+    span [start_B, end_B] (with B's span greater than or equal in length) will be removed.
+
+    Parameters
+    ----------
+    intervals : dict
+        Dictionary mapping cluster id -> list of (start, end) tuples.
+
+    Returns
+    -------
+    dict
+        New dictionary with enclosed clusters removed.
+
+    Example
+    -------
+    >>> intervals = {0: [(0, 11)], 1: [(12, 313)], 2: [(171, 176)]}
+    >>> cleaned = remove_enclosed_clusters(intervals)
+    >>> cleaned
+    {0: [(0, 11)], 1: [(12, 313)]}
+    """
+    if not intervals:
+        return intervals
+
+    # Compute overall span per cluster
+    spans = {}
+    for cid, ivs in intervals.items():
+        if not ivs:
+            continue
+        starts = [s for (s, e) in ivs]
+        ends = [e for (s, e) in ivs]
+        spans[cid] = (min(starts), max(ends))
+
+    keep = set(spans.keys())
+    for a, (sa, ea) in spans.items():
+        if a not in keep:
+            continue
+        for b, (sb, eb) in spans.items():
+            if a == b:
+                continue
+            # Check if A is fully inside B and B is at least as large
+            if sa >= sb and ea <= eb and (eb - sb) >= (ea - sa):
+                if a in keep:
+                    keep.remove(a)
+                break
+
+    return {cid: intervals[cid] for cid in keep}
+
+
 def filter_cluster_intervals(intervals: dict, min_size: int, attempt_merge: bool = True,
                              pae_matrix: Optional[np.ndarray] = None, min_avg_pae: Optional[float] = None) -> dict:
     """

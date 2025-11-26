@@ -8,7 +8,7 @@ from matplotlib import image, axes
 from .pae_handler import process_pae_data, load_pae
 from .sequence_reader import SequenceReader
 from .graph import create_graph, cluster_graph
-from .intervals import find_cluster_intervals, filter_cluster_intervals
+from .intervals import find_cluster_intervals, filter_cluster_intervals, remove_enclosed_clusters
 from afragmenter import plotting
 from .result import ClusteringResult
 
@@ -138,6 +138,11 @@ class AFragmenter:
                                                      attempt_merge=attempt_merge,
                                                      pae_matrix=self.pae_matrix,
                                                      min_avg_pae=min_avg_pae)
+
+        # If clusters were collapsed to single [min, max] intervals, optionally remove
+        # clusters that are fully enclosed within the span of another cluster.
+        if collapse_intervals:
+            cluster_intervals = remove_enclosed_clusters(cluster_intervals)
         return ClusteringResult(self.pae_matrix, cluster_intervals, params, self.sequence_reader)
     
 
