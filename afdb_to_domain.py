@@ -108,7 +108,7 @@ def main():
     )
     parser.add_argument(
         "--id", required=True,
-        help="UniProt/AlphaFoldDB identifier, e.g. 'Q8IZT6'."
+        help="UniProt/AlphaFoldDB identifier (e.g. 'Q8IZT6') or path to a text file with one ID per line."
     )
     parser.add_argument(
         "--out_root", required=True,
@@ -141,40 +141,60 @@ def main():
 
     args = parser.parse_args()
 
+    # Determine whether --id is a single ID or a path to a file containing IDs
+    if os.path.isfile(args.id):
+        with open(args.id, "r") as fh:
+            id_list = [line.strip() for line in fh if line.strip()]
+    else:
+        id_list = [args.id]
+
     # ------------ workflow starts here ------------
-    print(f"Fetching AFDB data for {args.id}...")
-    pae, structure, structure_basename = fetch_afdb_data(args.id, structure_format='pdb')
+    for uniprot_id in id_list:
+        print(f"Fetching AFDB data for {uniprot_id}...")
+        try:
+            pae, structure, structure_basename = fetch_afdb_data(uniprot_id, structure_format='pdb')
+        except Exception as e:
+            print(f"Error fetching AFDB data for {uniprot_id}: {e}")
+            continue
 
-    # Run AFragmenter
-    print(f"Fragmenting {args.id}...")
-    fragmenter = AFragmenter(pae, sequence_file=structure)
-    result = fragmenter.cluster(
-        resolution=args.resolution,
-        objective_function="modularity",
-        min_size=args.min_size,
-        min_avg_pae=args.min_avg_pae,
-        collapse_intervals=args.collapse_intervals,
-        max_overlap=args.max_overlap,
-    )
+        # Run AFragmenter
+        print(f"Fragmenting {uniprot_id}...")
+        try:
+            fragmenter = AFragmenter(pae, sequence_file=structure)
+            result = fragmenter.cluster(
+                resolution=args.resolution,
+                objective_function="modularity",
+                min_size=args.min_size,
+                min_avg_pae=args.min_avg_pae,
+                collapse_intervals=args.collapse_intervals,
+                max_overlap=args.max_overlap,
+            )
+        except Exception as e:
+            print(f"Error fragmenting {uniprot_id}: {e}")
+            continue
 
-    print(f"Preparing out files...")
-    # Convert result to domain DataFrame
-    df_result = result_to_domain_df(result)
+        print(f"Writing out files for {uniprot_id}...")
+        try:
+            # Convert result to domain DataFrame
+            df_result = result_to_domain_df(result)
 
-    # Insert structure_basename as the first column
-    df_result.insert(0, 'structure', structure_basename)
+            # Insert structure_basename as the first column
+            df_result.insert(0, 'structure', structure_basename)
 
-    # Save results
-    model_id = structure_basename.replace('.pdb', '')
-    outdir = os.path.join(args.out_root, model_id)
-    os.makedirs(outdir, exist_ok=True)
+            # Save results
+            model_id = structure_basename.replace('.pdb', '')
+            outdir = os.path.join(args.out_root, model_id)
+            os.makedirs(outdir, exist_ok=True)
 
-    # Save domain DataFrame
-    df_result.to_csv(os.path.join(outdir, f'{model_id}.csv'), index=False)
+            # Save domain DataFrame
+            df_result.to_csv(os.path.join(outdir, f'{model_id}.csv'), index=False)
 
-    # Save .pdb structure
-    with open(os.path.join(outdir, structure_basename), 'w') as f:
-        f.write(structure)
+            # Save .pdb structure
+            with open(os.path.join(outdir, structure_basename), 'w') as f:
+                f.write(structure)
+        except Exception as e:
+            print(f"Error writing out files for {uniprot_id}: {e}")
+            continue
 
 if __name__ == "__main__":
     main()
