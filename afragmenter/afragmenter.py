@@ -8,7 +8,12 @@ from matplotlib import image, axes
 from .pae_handler import process_pae_data, load_pae
 from .sequence_reader import SequenceReader
 from .graph import create_graph, cluster_graph
-from .intervals import find_cluster_intervals, filter_cluster_intervals, remove_enclosed_clusters
+from .intervals import (
+    find_cluster_intervals,
+    filter_cluster_intervals,
+    remove_enclosed_clusters,
+    resolve_overlaps_by_pae,
+)
 from afragmenter import plotting
 from .result import ClusteringResult
 
@@ -85,6 +90,7 @@ class AFragmenter:
                 attempt_merge: bool = True,
                 min_avg_pae: Optional[float] = None,
                 collapse_intervals: bool = False,
+                max_overlap: Optional[int] = None,
                 **kwargs) -> 'ClusteringResult':
         """
         Create a graph from the edge_weights_matrix and cluster it using the Leiden algorithm.
@@ -100,6 +106,8 @@ class AFragmenter:
         - min_avg_pae (float, optional): The maximum allowed average PAE within a cluster. Clusters above this threshold are removed.
         - collapse_intervals (bool, optional): If True, represent each cluster as a single interval spanning from the minimum to
                                                maximum residue index in that cluster, even if the residues are discontinuous.
+        - max_overlap (int, optional): Maximum allowed number of overlapping residues between any pair of domains when
+                                       collapse_intervals is True. If None, overlaps are not further resolved.
         - **kwargs: Additional keyword arguments to be passed to the community_leiden function from igraph.
 
         Returns:
@@ -123,6 +131,7 @@ class AFragmenter:
             "attempt_merge": attempt_merge,
             "min_avg_pae": min_avg_pae,
             "collapse_intervals": collapse_intervals,
+            "max_overlap": max_overlap,
         })
         
         clusters, cluster_params = cluster_graph(graph=self.graph, 
@@ -143,6 +152,12 @@ class AFragmenter:
         # clusters that are fully enclosed within the span of another cluster.
         if collapse_intervals:
             cluster_intervals = remove_enclosed_clusters(cluster_intervals)
+            if max_overlap is not None:
+                cluster_intervals = resolve_overlaps_by_pae(
+                    intervals=cluster_intervals,
+                    pae_matrix=self.pae_matrix,
+                    max_overlap=max_overlap,
+                )
         return ClusteringResult(self.pae_matrix, cluster_intervals, params, self.sequence_reader)
     
 
@@ -153,6 +168,7 @@ class AFragmenter:
             attempt_merge: bool = True,
             min_avg_pae: Optional[float] = None,
             collapse_intervals: bool = False,
+            max_overlap: Optional[int] = None,
             **kwargs) -> 'ClusteringResult':
         """Alias for the cluster method."""
         return self.cluster(resolution=resolution, 
@@ -162,6 +178,7 @@ class AFragmenter:
                             attempt_merge=attempt_merge,
                             min_avg_pae=min_avg_pae,
                             collapse_intervals=collapse_intervals,
+                            max_overlap=max_overlap,
                             **kwargs)
 
     def plot_pae(self, **kwargs) -> Tuple[image.AxesImage, axes.Axes]:

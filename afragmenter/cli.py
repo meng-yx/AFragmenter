@@ -169,6 +169,13 @@ class EitherRequired(Option):
               show_default="None",
               help="Minimum average PAE for a cluster to be kept."
 )
+@click.option("--max-overlap",
+              type=click.IntRange(min=0),
+              default=None,
+              show_default="None",
+              help="Maximum allowed number of overlapping residues between any pair of domains "
+                   "when collapsing intervals. If not set, overlapping domains are not further resolved."
+)
 @click.option("--collapse-intervals/--no-collapse-intervals",
               is_flag=True,
               default=False,
@@ -190,6 +197,7 @@ def main(structure: Path,
          plot_result: Path,
          save_fasta: Path,
          min_avg_pae: float,
+         max_overlap: int,
          collapse_intervals: bool,
          name: str) :
     
@@ -207,6 +215,7 @@ def main(structure: Path,
                                 min_size=min_size,
                                 attempt_merge=attempt_merge,
                                 min_avg_pae=min_avg_pae,
+                                max_overlap=max_overlap,
                                 collapse_intervals=collapse_intervals)
     
     # If base_name is set to 'auto', the name will be parsed from the structure file

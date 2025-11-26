@@ -331,6 +331,174 @@ def remove_enclosed_clusters(intervals: dict) -> dict:
     return {cid: intervals[cid] for cid in keep}
 
 
+def _cluster_span(intervals: list[tuple[int, int]]) -> tuple[int, int]:
+    """Return overall span (min_start, max_end) for a cluster's intervals."""
+    starts = [s for (s, e) in intervals]
+    ends = [e for (s, e) in intervals]
+    return min(starts), max(ends)
+
+
+def _cluster_length(intervals: list[tuple[int, int]]) -> int:
+    """Return total number of residues in a cluster's intervals."""
+    return sum(e - s + 1 for s, e in intervals)
+
+
+def _weighted_mean_pae_for_candidate(pae_matrix: np.ndarray,
+                                     candidate: dict[int, list[tuple[int, int]]]) -> float:
+    """
+    Compute weighted mean PAE for a small set of clusters defined in `candidate`.
+    """
+    total_weighted = 0.0
+    total_len = 0
+    for cid, ivs in candidate.items():
+        if not ivs:
+            continue
+        length = _cluster_length(ivs)
+        if length <= 1:
+            continue
+        avg_pae = calculate_cluster_average_pae(pae_matrix, ivs)
+        total_weighted += float(avg_pae) * length
+        total_len += length
+    if total_len == 0:
+        return float("inf")
+    return total_weighted / total_len
+
+
+
+def resolve_overlaps_by_pae(intervals: dict,
+                            pae_matrix: np.ndarray,
+                            max_overlap: int) -> dict:
+    """
+    Resolve partially overlapping domains by minimizing local weighted mean PAE.
+
+    This helper is intended for use after collapsing intervals (collapse_intervals=True),
+    where each cluster typically has a single (start, end) interval. It will:
+
+    - Detect pairs of clusters whose spans overlap by > max_overlap residues.
+    - For each such pair (A, B), consider three local configurations:
+        1. Assign the overlapping region to A only (remove it from B).
+        2. Assign the overlapping region to B only (remove it from A).
+        3. Merge A and B into a single cluster.
+      The configuration with the lowest weighted mean PAE (over the affected clusters)
+      is chosen and applied.
+
+    The procedure is greedy: it repeatedly scans for overlapping pairs, resolves the
+    first one it finds (if needed), updates the intervals, and restarts the scan until
+    no overlaps larger than max_overlap remain.
+    """
+    if max_overlap < 0:
+        raise ValueError("max_overlap must be greater than or equal to 0")
+    if not intervals:
+        return intervals
+
+    def build_spans(local_intervals: dict[int, list[tuple[int, int]]]) -> list[tuple[int, int, int]]:
+        spans_list: list[tuple[int, int, int]] = []
+        for cid, ivs in local_intervals.items():
+            if not ivs:
+                continue
+            start, end = _cluster_span(ivs)
+            spans_list.append((cid, start, end))
+        spans_list.sort(key=lambda x: x[1])
+        return spans_list
+
+    def resolve_pair(a_id: int, b_id: int, local_intervals: dict[int, list[tuple[int, int]]]) -> dict[int, list[tuple[int, int]]]:
+        a_ivs = local_intervals.get(a_id, [])
+        b_ivs = local_intervals.get(b_id, [])
+        if not a_ivs or not b_ivs:
+            return local_intervals
+
+        a_start, a_end = _cluster_span(a_ivs)
+        b_start, b_end = _cluster_span(b_ivs)
+
+        ov_start = max(a_start, b_start)
+        ov_end = min(a_end, b_end)
+        if ov_start > ov_end:
+            return local_intervals  # no actual overlap
+
+        # Helper to build non-overlapping pieces for a given interval [s, e]
+        def non_overlap_segments(s: int, e: int) -> list[tuple[int, int]]:
+            pieces: list[tuple[int, int]] = []
+            if s < ov_start:
+                pieces.append((s, ov_start - 1))
+            if ov_end < e:
+                pieces.append((ov_end + 1, e))
+            return pieces
+
+        candidates: list[tuple[str, dict[int, list[tuple[int, int]]]]] = []
+
+        # Base copy of current intervals for modification per candidate
+        base = {cid: ivs[:] for cid, ivs in local_intervals.items()}
+
+        # Option 1: overlap to A, remove from B
+        opt1 = {cid: ivs[:] for cid, ivs in base.items()}
+        opt1[a_id] = [(a_start, a_end)]
+        b_pieces = non_overlap_segments(b_start, b_end)
+        if b_pieces:
+            opt1[b_id] = b_pieces
+        else:
+            opt1.pop(b_id, None)
+        candidates.append(("overlap_to_a", opt1))
+
+        # Option 2: overlap to B, remove from A
+        opt2 = {cid: ivs[:] for cid, ivs in base.items()}
+        opt2[b_id] = [(b_start, b_end)]
+        a_pieces = non_overlap_segments(a_start, a_end)
+        if a_pieces:
+            opt2[a_id] = a_pieces
+        else:
+            opt2.pop(a_id, None)
+        candidates.append(("overlap_to_b", opt2))
+
+        # Option 3: merge A and B into single cluster (use a_id as merged id)
+        opt3 = {cid: ivs[:] for cid, ivs in base.items()}
+        merged_start = min(a_start, b_start)
+        merged_end = max(a_end, b_end)
+        opt3[a_id] = [(merged_start, merged_end)]
+        opt3.pop(b_id, None)
+        candidates.append(("merge", opt3))
+
+        # Evaluate candidates (only over the affected clusters)
+        best_candidate = None
+        best_score = float("inf")
+        for _, cand in candidates:
+            local = {cid: cand[cid] for cid in cand if cid in (a_id, b_id)}
+            score = _weighted_mean_pae_for_candidate(pae_matrix, local)
+            if score < best_score:
+                best_score = score
+                best_candidate = cand
+
+        if best_candidate is None:
+            return local_intervals
+
+        return best_candidate
+
+    # Main greedy loop
+    while True:
+        spans = build_spans(intervals)
+        modified = False
+
+        for i in range(len(spans) - 1):
+            a_id, a_start, a_end = spans[i]
+            b_id, b_start, b_end = spans[i + 1]
+            ov_start = max(a_start, b_start)
+            ov_end = min(a_end, b_end)
+            if ov_start > ov_end:
+                continue
+            ov_len = ov_end - ov_start + 1
+            if ov_len <= max_overlap:
+                continue
+
+            # Need to resolve this pair
+            intervals = resolve_pair(a_id, b_id, intervals)
+            modified = True
+            break
+
+        if not modified:
+            break
+
+    return intervals
+
+
 def filter_cluster_intervals(intervals: dict, min_size: int, attempt_merge: bool = True,
                              pae_matrix: Optional[np.ndarray] = None, min_avg_pae: Optional[float] = None) -> dict:
     """
