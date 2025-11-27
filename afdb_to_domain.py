@@ -1,5 +1,6 @@
 
 import os
+import sys
 import numpy as np
 import pandas as pd
 
@@ -107,8 +108,16 @@ def main():
         description="Run AFragmenter on AFDB PAE matrix and output domains to CSV and structure to PDB."
     )
     parser.add_argument(
-        "--id", required=True,
-        help="UniProt/AlphaFoldDB identifier (e.g. 'Q8IZT6') or path to a text file with one ID per line."
+        "--input", required=False,
+        help="Comma-delimited UniProt/AlphaFoldDB identifiers (e.g. 'Q8IZT6,Q9Y2U5')."
+    )
+    parser.add_argument(
+        "--input_csv", required=False,
+        help="Path to CSV file with an 'Entry' column of UniProt/AlphaFoldDB identifiers (e.g. subset_0.csv)."
+    )
+    parser.add_argument(
+        "--output_csv", required=False,
+        help="Optional path to write an output CSV with Status and Error columns appended."
     )
     parser.add_argument(
         "--out_root", required=True,
@@ -141,24 +150,18 @@ def main():
 
     args = parser.parse_args()
 
-    # Determine whether --id is a single ID or a path to a file containing IDs
-    if os.path.isfile(args.id):
-        with open(args.id, "r") as fh:
-            id_list = [line.strip() for line in fh if line.strip()]
-    else:
-        id_list = [args.id]
 
-    # ------------ workflow starts here ------------
-    for uniprot_id in id_list:
-        print(f"Fetching AFDB data for {uniprot_id}...")
+    def process_uniprot_id(uniprot_id: str) -> tuple[bool, str]:
+        """
+        Process a single UniProt ID: fetch AFDB data, run AFragmenter, and write outputs.
+
+        Returns (success: bool, error_message: str).
+        """
         try:
             pae, structure, structure_basename = fetch_afdb_data(uniprot_id, structure_format='pdb')
         except Exception as e:
-            print(f"Error fetching AFDB data for {uniprot_id}: {e}")
-            continue
+            return False, f"Error fetching AFDB data for {uniprot_id}: {e}"
 
-        # Run AFragmenter
-        print(f"Fragmenting {uniprot_id}...")
         try:
             fragmenter = AFragmenter(pae, sequence_file=structure)
             result = fragmenter.cluster(
@@ -170,31 +173,126 @@ def main():
                 max_overlap=args.max_overlap,
             )
         except Exception as e:
-            print(f"Error fragmenting {uniprot_id}: {e}")
-            continue
+            return False, f"Error fragmenting {uniprot_id}: {e}"
 
-        print(f"Writing out files for {uniprot_id}...")
         try:
             # Convert result to domain DataFrame
             df_result = result_to_domain_df(result)
 
             # Insert structure_basename as the first column
-            df_result.insert(0, 'structure', structure_basename)
+            df_result.insert(0, "structure", structure_basename)
 
-            # Save results
-            model_id = structure_basename.replace('.pdb', '')
-            outdir = os.path.join(args.out_root, model_id)
+            # Save results under out_root/{uniprot_id}
+            model_id = structure_basename.replace(".pdb", "")
+            outdir = os.path.join(args.out_root, uniprot_id)
             os.makedirs(outdir, exist_ok=True)
 
             # Save domain DataFrame
-            df_result.to_csv(os.path.join(outdir, f'{model_id}.csv'), index=False)
+            df_result.to_csv(os.path.join(outdir, f"{model_id}.csv"), index=False)
 
             # Save .pdb structure
-            with open(os.path.join(outdir, structure_basename), 'w') as f:
+            with open(os.path.join(outdir, structure_basename), "w") as f:
                 f.write(structure)
         except Exception as e:
-            print(f"Error writing out files for {uniprot_id}: {e}")
-            continue
+            return False, f"Error writing out files for {uniprot_id}: {e}"
+
+        return True, ""
+
+    # ------------ workflow starts here ------------
+
+    # If --input_csv is provided, it takes precedence over --input
+    if args.input_csv:
+        if not os.path.isfile(args.input_csv):
+            raise SystemExit(f"Input CSV not found: {args.input_csv}")
+
+        import csv
+
+        status_col = "Status"
+        error_col = "Error"
+
+        # Streaming mode: read input CSV row-by-row and write to output CSV as we go.
+        any_failed = False
+
+        if args.output_csv:
+            # Use line-buffered writing so progress is visible as the file grows.
+            with open(args.input_csv, newline="") as in_fh, open(
+                args.output_csv, "w", newline="", buffering=1
+            ) as out_fh:
+                reader = csv.DictReader(in_fh)
+                fieldnames = list(reader.fieldnames or [])
+                if "Entry" not in fieldnames:
+                    raise SystemExit("Input CSV must contain an 'Entry' column with UniProt/AFDB identifiers.")
+
+                if status_col not in fieldnames:
+                    fieldnames.append(status_col)
+                if error_col not in fieldnames:
+                    fieldnames.append(error_col)
+
+                writer = csv.DictWriter(out_fh, fieldnames=fieldnames)
+                writer.writeheader()
+
+                for row in reader:
+                    # Initialize status fields
+                    row.setdefault(status_col, "pending")
+                    row.setdefault(error_col, "")
+
+                    entry = (row.get("Entry") or "").strip()
+                    if not entry:
+                        row[status_col] = "fail"
+                        row[error_col] = "Missing Entry ID"
+                        any_failed = True
+                    else:
+                        print(f"Processing {entry} from CSV...")
+                        success, err = process_uniprot_id(entry)
+                        if success:
+                            row[status_col] = "success"
+                        else:
+                            row[status_col] = "fail"
+                            row[error_col] = err
+                            any_failed = True
+
+                    writer.writerow(row)
+                    out_fh.flush()
+        else:
+            # No output CSV requested: just process each row and track failures.
+            with open(args.input_csv, newline="") as in_fh:
+                reader = csv.DictReader(in_fh)
+                fieldnames = list(reader.fieldnames or [])
+                if "Entry" not in fieldnames:
+                    raise SystemExit("Input CSV must contain an 'Entry' column with UniProt/AFDB identifiers.")
+
+                for row in reader:
+                    entry = (row.get("Entry") or "").strip()
+                    if not entry:
+                        any_failed = True
+                        continue
+
+                    print(f"Processing {entry} from CSV...")
+                    success, _ = process_uniprot_id(entry)
+                    if not success:
+                        any_failed = True
+
+        if any_failed:
+            sys.exit(1)
+        return
+
+    # Fallback: use --input (comma-delimited IDs)
+    if not args.input:
+        raise SystemExit("Either --input or --input_csv must be provided.")
+
+    id_list = [x.strip() for x in args.input.split(",") if x.strip()]
+
+    any_failed = False
+    for uniprot_id in id_list:
+        print(f"Processing {uniprot_id}...")
+        success, err = process_uniprot_id(uniprot_id)
+        if not success:
+            print(err)
+            any_failed = True
+
+    # Exit with non-zero status if any ID failed
+    if any_failed:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
