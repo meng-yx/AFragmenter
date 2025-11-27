@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=afdb_to_domain
-#SBATCH --output=/scratch/%u/logs/afdb_to_domain_%A_%a.out
-#SBATCH --error=/scratch/%u/logs/afdb_to_domain_%A_%a.out
+#SBATCH --output=/scratch/%u/logs/afdb_to_domain_%A/afdb_to_domain_%A_%a.out
+#SBATCH --error=/scratch/%u/logs/afdb_to_domain_%A/afdb_to_domain_%A_%a.out
 #SBATCH --time=00:20:00
 #SBATCH --partition=standard
 #SBATCH --ntasks-per-node=1
@@ -57,3 +57,5 @@ python ./afdb_to_domain.py \
     --input_csv "$SUBSET_FILE" \
     --output_csv "$OUT_CSV" \
     --out_root "$DOMAINOME_DIR"
+
+echo "Finished processing subset $SUBSET_FILE"

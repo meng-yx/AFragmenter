@@ -182,9 +182,9 @@ def main():
             # Insert structure_basename as the first column
             df_result.insert(0, "structure", structure_basename)
 
-            # Save results under out_root/{uniprot_id}
+            # Save results under out_root/{model_id}
             model_id = structure_basename.replace(".pdb", "")
-            outdir = os.path.join(args.out_root, uniprot_id)
+            outdir = os.path.join(args.out_root, model_id)
             os.makedirs(outdir, exist_ok=True)
 
             # Save domain DataFrame
@@ -198,7 +198,7 @@ def main():
 
         return True, ""
 
-    # ------------ workflow starts here ------------
+    # ---------- Proteome .csv-based workflow: ------------
 
     # If --input_csv is provided, it takes precedence over --input
     if args.input_csv:
@@ -210,51 +210,48 @@ def main():
         status_col = "Status"
         error_col = "Error"
 
-        # Streaming mode: read input CSV row-by-row and write to output CSV as we go.
-        any_failed = False
-
         if args.output_csv:
-            # Use line-buffered writing so progress is visible as the file grows.
-            with open(args.input_csv, newline="") as in_fh, open(
-                args.output_csv, "w", newline="", buffering=1
-            ) as out_fh:
-                reader = csv.DictReader(in_fh)
-                fieldnames = list(reader.fieldnames or [])
-                if "Entry" not in fieldnames:
+            # If output_csv already exists, resume from it and only process rows with Status=='pending'.
+            if os.path.isfile(args.output_csv):
+                df = pd.read_csv(args.output_csv)
+                if "Entry" not in df.columns:
+                    raise SystemExit("Existing output CSV must contain an 'Entry' column.")
+                if status_col not in df.columns or error_col not in df.columns:
+                    raise SystemExit("Existing output CSV must contain 'Status' and 'Error' columns.")
+            else:
+                # First run: make a full copy of the input CSV to output_csv, with Status/Error initialized.
+                df = pd.read_csv(args.input_csv)
+                if "Entry" not in df.columns:
                     raise SystemExit("Input CSV must contain an 'Entry' column with UniProt/AFDB identifiers.")
 
-                if status_col not in fieldnames:
-                    fieldnames.append(status_col)
-                if error_col not in fieldnames:
-                    fieldnames.append(error_col)
+                df[status_col] = "pending"
+                df[error_col] = ""
 
-                writer = csv.DictWriter(out_fh, fieldnames=fieldnames)
-                writer.writeheader()
+                df.to_csv(args.output_csv, index=False)
 
-                for row in reader:
-                    # Initialize status fields
-                    row.setdefault(status_col, "pending")
-                    row.setdefault(error_col, "")
+            # Iterate through rows with Status=='pending', process each Entry, and update Status/Error.
+            for idx in range(len(df)):
+                if str(df.at[idx, status_col]) != "pending":
+                    continue
 
-                    entry = (row.get("Entry") or "").strip()
-                    if not entry:
-                        row[status_col] = "fail"
-                        row[error_col] = "Missing Entry ID"
-                        any_failed = True
+                entry = str(df.at[idx, "Entry"]).strip()
+                if not entry or entry.lower() == "nan":
+                    df.at[idx, status_col] = "fail"
+                    df.at[idx, error_col] = "Missing Entry ID"
+                else:
+                    print(f"Processing {entry} from CSV...")
+                    success, err = process_uniprot_id(entry)
+                    if success:
+                        df.at[idx, status_col] = "success"
                     else:
-                        print(f"Processing {entry} from CSV...")
-                        success, err = process_uniprot_id(entry)
-                        if success:
-                            row[status_col] = "success"
-                        else:
-                            row[status_col] = "fail"
-                            row[error_col] = err
-                            any_failed = True
+                        df.at[idx, status_col] = "fail"
+                        df.at[idx, error_col] = err
 
-                    writer.writerow(row)
-                    out_fh.flush()
+                # Rewrite the entire CSV so out.csv reflects current Status/Error.
+                df.to_csv(args.output_csv, index=False)
         else:
             # No output CSV requested: just process each row and track failures.
+            any_failed = False
             with open(args.input_csv, newline="") as in_fh:
                 reader = csv.DictReader(in_fh)
                 fieldnames = list(reader.fieldnames or [])
@@ -272,10 +269,18 @@ def main():
                     if not success:
                         any_failed = True
 
-        if any_failed:
+        # Determine overall success based on final Status column if we have an output CSV,
+        # otherwise use any_failed flag from streaming mode.
+        if args.output_csv:
+            # Re-read the final output CSV to check overall status.
+            df_final = pd.read_csv(args.output_csv)
+            if status_col in df_final.columns and (df_final[status_col] != "success").any():
+                sys.exit(1)
+        elif any_failed:
             sys.exit(1)
         return
 
+    # ---------- Simple comma-delimited ID list workflow: ------------
     # Fallback: use --input (comma-delimited IDs)
     if not args.input:
         raise SystemExit("Either --input or --input_csv must be provided.")
