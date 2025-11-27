@@ -9,9 +9,9 @@ from pymol import cmd
 
 # Palette of distinct colors for positive domains (cycled if needed)
 DOMAIN_COLORS: List[str] = [
-    "tv_blue", "marine", "orange", "forest", "magenta", "yellow",
-    "cyan", "salmon", "wheat", "lime", "violet", "hotpink",
-    "deepteal", "slate", "tv_green", "tv_red", "tv_yellow",
+    "tv_blue", "orange", "forest", "magenta", "yellow", "marine",
+    "violet", "salmon", "tv_green", "wheat", "deepteal", "hotpink",
+    "cyan", "slate", "lime", "tv_red", "tv_yellow",
 ]
 
 
